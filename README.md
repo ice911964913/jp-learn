@@ -32,14 +32,14 @@ python -m pip install -r requirements.txt
 streamlit run app.py
 ```
 
-首次啟動會自動匯入 124 個 N3 起始單字。瀏覽器自動打開 http://localhost:8501
+首次啟動會自動匯入 124 個 N3 起始單字。瀏覽器自動打開 http://localhost:8502
 
 ## 手機在外面也能用（Tailscale）
 
 1. 電腦裝 [Tailscale](https://tailscale.com/download)，登入後取得內部 IP（例：`100.x.x.x`）
 2. 手機裝 Tailscale App，登入同一帳號
 3. 電腦上跑 `streamlit run app.py` 保持開著
-4. 手機瀏覽器開 `http://100.x.x.x:8501`
+4. 手機瀏覽器開 `http://100.x.x.x:8502`
 5. Safari / Chrome 選「加到主畫面」→ 變成 App 圖示
 
 ## 專案結構
