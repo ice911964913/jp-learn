@@ -1,7 +1,7 @@
 """jp_learn — 個人日文學習 App (N4 → N3/N2).
 
 啟動：streamlit run app.py
-手機在外面用：搭配 Tailscale 連回家中電腦的 8501 port。
+手機在外面用：搭配 Tailscale 連回家中電腦的 8502 port。
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from corpus import ensure_seeded
 from db import get_conn, init_db
 from ingest.furigana import annotate_ruby
 from ingest.jisho import lookup as jisho_lookup
-from ingest.nhk_easy import fetch_latest as nhk_fetch_latest
+from ingest.matcha_easy import fetch_latest as easy_fetch_latest
 from srs import get_due_cards, grade_card, init_srs
 
 # ───────────────────────── 啟動初始化 ─────────────────────────
@@ -53,7 +53,7 @@ st.markdown(
 
 
 # ───────────────────────── 導覽 ─────────────────────────
-PAGES = ["📖 複習", "📚 生字本", "📰 文章", "🗞️ NHK 新聞", "📊 進度"]
+PAGES = ["📖 複習", "📚 生字本", "📰 文章", "🗞️ 簡單日語", "📊 進度"]
 page = st.sidebar.radio("選單", PAGES, label_visibility="collapsed")
 st.sidebar.divider()
 st.sidebar.caption(f"今日：{date.today().isoformat()}")
@@ -359,24 +359,29 @@ def page_article():
                 st.error(f"查詢失敗：{e}")
 
 
-# ───────────────────────── 🗞️ NHK 新聞 ─────────────────────────
-def page_nhk():
-    st.title("🗞️ NHK News Easy")
-    st.caption("N3-N4 等級的真實日語新聞")
+# ───────────────────────── 🗞️ 簡單日語 ─────────────────────────
+def page_easy():
+    st.title("🗞️ MATCHA 簡單日語")
+    st.caption("N4-N3 等級的日本旅遊/文化文章（NHK Easy 改版需登入，已停用）")
 
     col1, col2 = st.columns([3, 1])
     limit = col1.slider("抓取篇數", 3, 15, 5)
     if col2.button("🔄 抓最新", type="primary", use_container_width=True):
-        with st.spinner("抓 NHK 中..."):
+        with st.spinner("抓 MATCHA 中..."):
             try:
-                articles = nhk_fetch_latest(limit=limit)
+                articles = easy_fetch_latest(limit=limit)
                 with get_conn() as conn:
                     saved = 0
                     for a in articles:
+                        # RSS 每次回傳同一批，用原文網址去重
+                        if conn.execute(
+                            "SELECT 1 FROM article WHERE source_url = ?", (a.url,)
+                        ).fetchone():
+                            continue
                         cur = conn.execute(
                             """
                             INSERT INTO article (title, body, source_url, source_type, published_at)
-                            VALUES (?, ?, ?, 'nhk_easy', ?)
+                            VALUES (?, ?, ?, 'matcha_easy', ?)
                             """,
                             (a.title, a.body, a.url, a.published_at),
                         )
@@ -393,14 +398,14 @@ def page_nhk():
             """
             SELECT id, title, body, source_url, added_at, read_at
               FROM article
-             WHERE source_type = 'nhk_easy'
+             WHERE source_type IN ('matcha_easy', 'nhk_easy')
              ORDER BY added_at DESC
              LIMIT 30
             """
         ).fetchall()
 
     if not rows:
-        st.info("還沒抓過 NHK 新聞，按上面『抓最新』。")
+        st.info("還沒抓過文章，按上面『抓最新』。")
         return
 
     for r in rows:
@@ -496,7 +501,7 @@ ROUTES = {
     "📖 複習": page_review,
     "📚 生字本": page_vocab,
     "📰 文章": page_article,
-    "🗞️ NHK 新聞": page_nhk,
+    "🗞️ 簡單日語": page_easy,
     "📊 進度": page_dashboard,
 }
 ROUTES[page]()

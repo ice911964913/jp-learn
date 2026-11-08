@@ -11,7 +11,7 @@
 | 📖 複習 | SM-2 間隔重複，今日到期的單字卡片式複習 |
 | 📚 生字本 | 手動加字 / jisho.org 自動查 / 搜尋 / 篩選 / 刪除 |
 | 📰 文章 | 貼任何日文 → 自動標 furigana（HTML ruby）→ 圈生字加入 |
-| 🗞️ NHK 新聞 | 一鍵抓 NHK News Easy 最新文章，標假名閱讀 |
+| 🗞️ 簡單日語 | 一鍵抓 MATCHA やさしい日本語文章，標假名閱讀 |
 | 📊 進度 | 累積單字數、JLPT 等級分布、過去 30 天複習量、未來 14 天到期排程 |
 
 ## 技術棧
@@ -21,7 +21,7 @@
 - **pykakasi** — 漢字 → 平假名 標注，純 Python 無 MeCab
 - **fugashi + unidic-lite** — 分詞（備用，目前 furigana 用 pykakasi 就夠）
 - **jisho.org API** — 免費字典，無金鑰
-- **NHK News Easy** — 真實 N3-N4 級新聞（自建爬蟲）
+- **MATCHA やさしい日本語** — N4-N3 級旅遊/文化文章（RSS）。NHK News Easy 2026 改版後需登入 NHK ONE，已停用
 - **SM-2 演算法** — Anki 同款的間隔重複排程
 
 ## 安裝 + 啟動
@@ -55,7 +55,8 @@ jp_learn/
 ├── ingest/
 │   ├── furigana.py           # pykakasi 包裝：annotate / annotate_ruby / tokenize
 │   ├── jisho.py              # jisho.org API client
-│   └── nhk_easy.py           # NHK News Web Easy 爬蟲
+│   ├── matcha_easy.py        # MATCHA 簡單日語 RSS 抓取
+│   └── nhk_easy.py           # NHK News Web Easy 爬蟲（已停用，NHK 改版需登入）
 ├── corpus/
 │   ├── n3_starter.csv        # 124 個 N3 起始單字
 │   └── seed.py               # 匯入 CSV → vocab + 建 SRS 排程
