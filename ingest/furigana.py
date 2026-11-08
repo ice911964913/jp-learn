@@ -19,8 +19,19 @@ def _get_kakasi():
 
 
 def _segments(text: str) -> list[dict]:
-    """回傳 pykakasi 分段結果：[{'orig': ..., 'hira': ..., 'kana': ..., ...}, ...]"""
-    return _get_kakasi().convert(text)
+    """回傳 pykakasi 分段結果：[{'orig': ..., 'hira': ..., 'kana': ..., ...}, ...]
+
+    pykakasi 遇到換行會把前一段重複輸出（「行こう\n東京」→ 行こ/う/\n/う/東京），
+    所以逐行轉換再自己補回換行。
+    """
+    kks = _get_kakasi()
+    out: list[dict] = []
+    for i, line in enumerate(text.split("\n")):
+        if i:
+            out.append({"orig": "\n", "hira": "\n"})
+        if line:
+            out.extend(kks.convert(line))
+    return out
 
 
 def annotate(text: str) -> str:

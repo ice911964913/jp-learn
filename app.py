@@ -16,6 +16,8 @@ from db import get_conn, init_db
 from ingest.furigana import annotate_ruby
 from ingest.jisho import lookup as jisho_lookup
 from ingest.matcha_easy import fetch_latest as easy_fetch_latest
+from ingest.reader import to_clickable_html
+from ingest.tatoeba import examples as tatoeba_examples
 from srs import get_due_cards, grade_card, init_srs
 
 # ───────────────────────── 啟動初始化 ─────────────────────────
@@ -85,6 +87,130 @@ def stats_summary() -> dict:
 
 def clear_stats_cache():
     stats_summary.clear()
+
+
+def add_vocab_from_jisho(r, source: str) -> bool:
+    """把 jisho 查到的字加入生字本 + 建 SRS 排程。已存在回傳 False。"""
+    try:
+        with get_conn() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO vocab (word, reading, meaning_en, pos, jlpt_level, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    r.word,
+                    r.reading,
+                    "; ".join(r.meanings_en[:3]),
+                    ", ".join(r.pos[:2]),
+                    r.jlpt,
+                    source,
+                ),
+            )
+            init_srs(conn, cur.lastrowid)
+    except sqlite3.IntegrityError:
+        return False
+    clear_stats_cache()
+    return True
+
+
+# ───────────────────────── 點字查詢閱讀器 ─────────────────────────
+_READER_CSS = """
+.jp-reader p    { margin: 0 0 0.9rem; line-height: 2.4; font-size: 1.15rem; }
+.jp-reader ruby { font-size: 1.35rem; }
+.jp-reader rt   { font-size: 0.7rem; color: #888; }
+.jp-reader .w   { cursor: pointer; border-radius: 4px; }
+.jp-reader .w:hover { background: #FDE7E3; }
+.jp-reader .w.on    { background: #F9C5BB; }
+"""
+
+_READER_JS = """
+export default function(component) {
+    const { data, setTriggerValue, parentElement } = component;
+    let root = parentElement.querySelector('.jp-reader');
+    if (!root) {
+        root = document.createElement('div');
+        root.className = 'jp-reader';
+        parentElement.appendChild(root);
+    }
+    if (root.dataset.src !== data) {
+        root.innerHTML = data;
+        root.dataset.src = data;
+    }
+    root.onclick = (e) => {
+        const w = e.target.closest('.w');
+        if (!w) return;
+        root.querySelectorAll('.w.on').forEach((x) => x.classList.remove('on'));
+        w.classList.add('on');
+        setTriggerValue('clicked', w.dataset.w);
+    };
+}
+"""
+
+_reader_component = st.components.v2.component("jp_reader", css=_READER_CSS, js=_READER_JS)
+
+
+@st.cache_data(show_spinner=False)
+def _clickable_html(text: str) -> str:
+    return to_clickable_html(text)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_jisho(word: str):
+    return jisho_lookup(word)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_examples(word: str):
+    return tatoeba_examples(word)
+
+
+@st.dialog("🔍 單字")
+def word_dialog(word: str):
+    try:
+        results = _cached_jisho(word)
+    except Exception as e:
+        st.error(f"jisho 查詢失敗：{e}")
+        return
+    if not results:
+        st.warning(f"jisho 查不到「{word}」")
+        return
+
+    r = results[0]
+    st.markdown(f"<div class='jp-word'>{r.word}</div>", unsafe_allow_html=True)
+    if r.reading and r.reading != r.word:
+        st.markdown(f"<div class='jp-reading'>{r.reading}</div>", unsafe_allow_html=True)
+    tags = [t for t in [r.jlpt, "常用" if r.is_common else None, *r.pos[:2]] if t]
+    if tags:
+        st.caption(" · ".join(tags))
+    st.markdown("**意思**：" + "; ".join(r.meanings_en[:6]))
+
+    st.markdown("**例句**")
+    try:
+        exs = _cached_examples(word)
+    except Exception as e:
+        exs = []
+        st.caption(f"例句抓取失敗：{e}")
+    if not exs:
+        st.caption("找不到例句")
+    for ex in exs:
+        st.markdown(f"<div class='jp-article'>{annotate_ruby(ex.jp)}</div>", unsafe_allow_html=True)
+        st.caption(ex.translation)
+
+    if st.button("➕ 加入生字本", type="primary", use_container_width=True):
+        if add_vocab_from_jisho(r, "article:reader"):
+            st.success(f"✅ 已加入：{r.word}（{r.reading}）")
+        else:
+            st.info(f"已存在：{r.word}（{r.reading}）")
+
+
+def render_reader(text: str, key: str):
+    """顯示標好假名的文章，點任一字跳出解釋 + 例句。"""
+    result = _reader_component(
+        data=_clickable_html(text), key=key, on_clicked_change=lambda: None
+    )
+    if result.clicked:
+        word_dialog(result.clicked)
 
 
 # ───────────────────────── 📖 複習 ─────────────────────────
@@ -316,13 +442,8 @@ def page_article():
     if st.session_state.article_text:
         st.divider()
         st.subheader("📖 標注版本")
-        html = annotate_ruby(st.session_state.article_text)
-        # 段落保留換行
-        html_with_breaks = html.replace("\n", "<br>")
-        st.markdown(
-            f"<div class='jp-article'>{html_with_breaks}</div>",
-            unsafe_allow_html=True,
-        )
+        st.caption("👆 點任何一個字，跳出解釋和例句")
+        render_reader(st.session_state.article_text, key="reader_manual")
 
         st.divider()
         st.subheader("✏️ 加入生字")
@@ -335,26 +456,10 @@ def page_article():
                     st.warning("jisho 查不到，請手動到生字本新增")
                 else:
                     r = results[0]
-                    with get_conn() as conn:
-                        try:
-                            cur = conn.execute(
-                                """
-                                INSERT INTO vocab (word, reading, meaning_en, pos, jlpt_level, source)
-                                VALUES (?, ?, ?, ?, ?, 'article:reader')
-                                """,
-                                (
-                                    r.word,
-                                    r.reading,
-                                    "; ".join(r.meanings_en[:3]),
-                                    ", ".join(r.pos[:2]),
-                                    r.jlpt,
-                                ),
-                            )
-                            init_srs(conn, cur.lastrowid)
-                            clear_stats_cache()
-                            st.success(f"✅ 已加入：{r.word}（{r.reading}）— {r.meanings_en[0] if r.meanings_en else ''}")
-                        except sqlite3.IntegrityError:
-                            st.info(f"已存在：{r.word}（{r.reading}）")
+                    if add_vocab_from_jisho(r, "article:reader"):
+                        st.success(f"✅ 已加入：{r.word}（{r.reading}）— {r.meanings_en[0] if r.meanings_en else ''}")
+                    else:
+                        st.info(f"已存在：{r.word}（{r.reading}）")
             except Exception as e:
                 st.error(f"查詢失敗：{e}")
 
@@ -411,11 +516,8 @@ def page_easy():
     for r in rows:
         read_mark = "✅ " if r["read_at"] else ""
         with st.expander(f"{read_mark}{r['title']}  ·  {r['added_at'][:10]}"):
-            html = annotate_ruby(r["body"])
-            st.markdown(
-                f"<div class='jp-article'>{html.replace(chr(10), '<br>')}</div>",
-                unsafe_allow_html=True,
-            )
+            st.caption("👆 點任何一個字，跳出解釋和例句")
+            render_reader(r["body"], key=f"reader_{r['id']}")
             st.markdown(f"[原文連結]({r['source_url']})")
             if not r["read_at"]:
                 if st.button("📌 標記已讀", key=f"read_{r['id']}"):
