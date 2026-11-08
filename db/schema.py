@@ -82,6 +82,16 @@ CREATE TABLE IF NOT EXISTS grammar (
 );
 
 
+-- 中文釋義快取（Claude 依 jisho 英文釋義寫的繁中意思，每字只查一次）
+CREATE TABLE IF NOT EXISTS zh_gloss (
+    word          TEXT    NOT NULL,
+    reading       TEXT    NOT NULL,
+    meaning_zh    TEXT    NOT NULL,
+    created_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (word, reading)
+);
+
+
 -- key-value 設定（首次啟動標記、版本等）
 CREATE TABLE IF NOT EXISTS settings (
     key           TEXT    PRIMARY KEY,

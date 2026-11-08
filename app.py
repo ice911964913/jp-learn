@@ -18,6 +18,7 @@ from ingest.jisho import lookup as jisho_lookup
 from ingest.matcha_easy import fetch_latest as easy_fetch_latest
 from ingest.reader import to_clickable_html
 from ingest.tatoeba import examples as tatoeba_examples
+from ingest.zh_gloss import meaning_zh as zh_meaning
 from srs import get_due_cards, grade_card, init_srs
 
 # ───────────────────────── 啟動初始化 ─────────────────────────
@@ -89,18 +90,27 @@ def clear_stats_cache():
     stats_summary.clear()
 
 
-def add_vocab_from_jisho(r, source: str) -> bool:
+def zh_or_none(r) -> str | None:
+    """jisho 結果的繁中釋義（Claude，有快取）；沒 API key 或失敗回傳 None。"""
+    try:
+        return zh_meaning(r.word, r.reading, r.meanings_en, r.pos)
+    except Exception:
+        return None
+
+
+def add_vocab_from_jisho(r, source: str, meaning_zh: str | None = None) -> bool:
     """把 jisho 查到的字加入生字本 + 建 SRS 排程。已存在回傳 False。"""
     try:
         with get_conn() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO vocab (word, reading, meaning_en, pos, jlpt_level, source)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO vocab (word, reading, meaning_zh, meaning_en, pos, jlpt_level, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     r.word,
                     r.reading,
+                    meaning_zh,
                     "; ".join(r.meanings_en[:3]),
                     ", ".join(r.pos[:2]),
                     r.jlpt,
@@ -323,7 +333,10 @@ def word_dialog(word: str):
     tags = [t for t in [r.jlpt, "常用" if r.is_common else None, *r.pos[:2]] if t]
     if tags:
         st.caption(" · ".join(tags))
-    st.markdown("**意思**：" + "; ".join(r.meanings_en[:6]))
+    with st.spinner("查中文意思..."):
+        zh = zh_or_none(r)
+    st.markdown(f"**意思**：{zh}" if zh else "**意思**：（中文釋義暫時無法取得）")
+    st.caption("英文：" + "; ".join(r.meanings_en[:6]))
 
     st.markdown("**例句**")
     try:
@@ -338,7 +351,7 @@ def word_dialog(word: str):
         st.caption(ex.translation)
 
     if st.button("➕ 加入生字本", type="primary", use_container_width=True):
-        if add_vocab_from_jisho(r, "article:reader"):
+        if add_vocab_from_jisho(r, "article:reader", zh):
             st.success(f"✅ 已加入：{r.word}（{r.reading}）")
         else:
             st.info(f"已存在：{r.word}（{r.reading}）")
@@ -596,7 +609,7 @@ def page_article():
                     st.warning("jisho 查不到，請手動到生字本新增")
                 else:
                     r = results[0]
-                    if add_vocab_from_jisho(r, "article:reader"):
+                    if add_vocab_from_jisho(r, "article:reader", zh_or_none(r)):
                         st.success(f"✅ 已加入：{r.word}（{r.reading}）— {r.meanings_en[0] if r.meanings_en else ''}")
                     else:
                         st.info(f"已存在：{r.word}（{r.reading}）")
