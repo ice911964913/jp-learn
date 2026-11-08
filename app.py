@@ -116,15 +116,56 @@ def add_vocab_from_jisho(r, source: str) -> bool:
 
 # ───────────────────────── 點字查詢閱讀器 ─────────────────────────
 _READER_CSS = """
-.jp-reader p    { margin: 0 0 0.9rem; line-height: 2.4; font-size: 1.15rem; }
+.jp-reader p    { margin: 0 0 0.9rem; line-height: 2.4; font-size: 1.15rem; border-radius: 6px; }
 .jp-reader ruby { font-size: 1.35rem; }
 .jp-reader rt   { font-size: 0.7rem; color: #888; }
 .jp-reader .w   { cursor: pointer; border-radius: 4px; }
 .jp-reader .w:hover { background: #FDE7E3; }
 .jp-reader .w.on    { background: #F9C5BB; }
+.jp-reader p.speaking { background: #FFF4D6; }
+.jp-tts { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin-bottom: 0.8rem; }
+.jp-tts button, .jp-tts select {
+    font-size: 0.9rem; padding: 0.3rem 0.7rem; border-radius: 8px; cursor: pointer;
+    border: 1px solid #ddd; background: #fff; color: #333;
+}
+.jp-tts button:hover { border-color: #E94F37; color: #E94F37; }
+.jp-tts .jp-tts-status { font-size: 0.8rem; color: #888; }
+.jp-reader button.jp-play-p {
+    font-size: 0.7rem; padding: 0 0.35rem; margin-right: 0.35rem; vertical-align: middle;
+    border: 1px solid #ddd; border-radius: 50%; background: #fff; color: #E94F37; cursor: pointer;
+}
 """
 
+# 朗讀用瀏覽器內建語音（speechSynthesis）：免費、離線、手機也有日文語音
 _READER_JS = """
+const TOOLBAR = `
+<div class="jp-tts">
+  <button data-act="all">▶ 整篇朗讀</button>
+  <button data-act="sel">▶ 朗讀選取</button>
+  <button data-act="stop">⏹ 停止</button>
+  <select data-act="rate" title="語速">
+    <option value="0.7">0.7x</option><option value="0.85">0.85x</option>
+    <option value="1" selected>1.0x</option><option value="1.2">1.2x</option>
+  </select>
+  <span class="jp-tts-status"></span>
+</div>`;
+
+const VOICE_PREF = ['Nanami', 'Natural', 'Google', 'Kyoko', 'O-Ren', 'Haruka', 'Ayumi'];
+
+function pickVoice() {
+    const vs = speechSynthesis.getVoices().filter((v) => v.lang.replace('_', '-').startsWith('ja'));
+    for (const k of VOICE_PREF) {
+        const v = vs.find((x) => x.name.includes(k));
+        if (v) return v;
+    }
+    return vs[0] || null;
+}
+
+function sentences(text) {
+    // 長段落一次念完，Chrome 會在約 15 秒後中斷 → 切成句子
+    return text.match(/[^。！？!?]+[。！？!?」』）)]*/g) || [text];
+}
+
 export default function(component) {
     const { data, setTriggerValue, parentElement } = component;
     let root = parentElement.querySelector('.jp-reader');
@@ -134,12 +175,108 @@ export default function(component) {
         parentElement.appendChild(root);
     }
     if (root.dataset.src !== data) {
-        root.innerHTML = data;
+        root.innerHTML = TOOLBAR + '<div class="jp-body">' + data + '</div>';
         root.dataset.src = data;
+        root.querySelectorAll('.jp-body p').forEach((p) => {
+            const b = document.createElement('button');
+            b.className = 'jp-play-p';
+            b.dataset.act = 'para';
+            b.title = '朗讀這段';
+            b.textContent = '▶';
+            p.prepend(b);
+        });
     }
+
+    const status = root.querySelector('.jp-tts-status');
+    const rateSel = root.querySelector('select[data-act=rate]');
+    const clearMarks = () => root.querySelectorAll('p.speaking').forEach((p) => p.classList.remove('speaking'));
+
+    // items: [{text, el}]；用 generation 編號避免停止/重播時舊佇列繼續念
+    const speak = (items) => {
+        if (!('speechSynthesis' in window)) {
+            status.textContent = '這個瀏覽器不支援朗讀';
+            return;
+        }
+        const gen = (root._gen = (root._gen || 0) + 1);
+        speechSynthesis.cancel();
+        clearMarks();
+        const voice = pickVoice();
+        status.textContent = voice ? '' : '找不到日文語音，可能會用預設聲音';
+        const queue = items.flatMap((it) => sentences(it.text).map((s) => ({ text: s, el: it.el })));
+        let i = 0;
+        const next = () => {
+            if (gen !== root._gen) return;
+            if (i >= queue.length) { clearMarks(); return; }
+            const it = queue[i++];
+            const u = new SpeechSynthesisUtterance(it.text);
+            u.lang = 'ja-JP';
+            if (voice) u.voice = voice;
+            u.rate = parseFloat(rateSel.value);
+            u.onstart = () => {
+                if (gen !== root._gen) return;
+                clearMarks();
+                if (it.el) it.el.classList.add('speaking');
+            };
+            u.onend = next;
+            u.onerror = (e) => { if (e.error !== 'interrupted' && e.error !== 'canceled') next(); };
+            speechSynthesis.speak(u);
+        };
+        next();
+    };
+
+    // 段落原文：去掉 <rt> 讀音和 ▶ 按鈕
+    const plainText = (node) => {
+        const c = node.cloneNode(true);
+        c.querySelectorAll('rt, rp, button').forEach((x) => x.remove());
+        return c.textContent.trim();
+    };
+    const paraItem = (p) => ({ text: plainText(p), el: p });
+
+    // 點按鈕時選取範圍可能已被清掉 → 隨時記下最後一次在本文內的選取
+    const readSelection = () => {
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed || !sel.rangeCount) return '';
+        const r = sel.getRangeAt(0);
+        if (!root.querySelector('.jp-body').contains(r.commonAncestorContainer)) return '';
+        const box = document.createElement('div');
+        box.appendChild(r.cloneContents());
+        return plainText(box);
+    };
+    if (!root._selHandler) {
+        root._selHandler = () => {
+            const t = readSelection();
+            if (t) root._lastSel = t;
+        };
+        document.addEventListener('selectionchange', root._selHandler);
+    }
+
+    root.querySelectorAll('.jp-tts button, button.jp-play-p').forEach((b) => {
+        b.onmousedown = (e) => e.preventDefault();  // 別讓按鈕把選取清掉
+    });
+
     root.onclick = (e) => {
+        const btn = e.target.closest('button[data-act]');
+        if (btn) {
+            const act = btn.dataset.act;
+            if (act === 'all') {
+                speak([...root.querySelectorAll('.jp-body p')].map(paraItem));
+            } else if (act === 'para') {
+                speak([paraItem(btn.closest('p'))]);
+            } else if (act === 'sel') {
+                const t = readSelection() || root._lastSel;
+                if (t) speak([{ text: t, el: null }]);
+                else status.textContent = '先用滑鼠／手指選取要念的文字';
+            } else if (act === 'stop') {
+                root._gen = (root._gen || 0) + 1;
+                speechSynthesis.cancel();
+                clearMarks();
+            }
+            return;
+        }
         const w = e.target.closest('.w');
         if (!w) return;
+        // 拖曳選取文字時不要跳單字視窗
+        if (!window.getSelection().isCollapsed) return;
         root.querySelectorAll('.w.on').forEach((x) => x.classList.remove('on'));
         w.classList.add('on');
         setTriggerValue('clicked', w.dataset.w);
@@ -147,7 +284,10 @@ export default function(component) {
 }
 """
 
-_reader_component = st.components.v2.component("jp_reader", css=_READER_CSS, js=_READER_JS)
+# isolate_styles=False：不放 shadow DOM，window.getSelection() 才讀得到選取的文字
+_reader_component = st.components.v2.component(
+    "jp_reader", css=_READER_CSS, js=_READER_JS, isolate_styles=False
+)
 
 
 @st.cache_data(show_spinner=False)
@@ -442,7 +582,7 @@ def page_article():
     if st.session_state.article_text:
         st.divider()
         st.subheader("📖 標注版本")
-        st.caption("👆 點任何一個字，跳出解釋和例句")
+        st.caption("👆 點字查解釋和例句 · ▶ 朗讀整篇／單段／選取的文字")
         render_reader(st.session_state.article_text, key="reader_manual")
 
         st.divider()
@@ -516,7 +656,7 @@ def page_easy():
     for r in rows:
         read_mark = "✅ " if r["read_at"] else ""
         with st.expander(f"{read_mark}{r['title']}  ·  {r['added_at'][:10]}"):
-            st.caption("👆 點任何一個字，跳出解釋和例句")
+            st.caption("👆 點字查解釋和例句 · ▶ 朗讀整篇／單段／選取的文字")
             render_reader(r["body"], key=f"reader_{r['id']}")
             st.markdown(f"[原文連結]({r['source_url']})")
             if not r["read_at"]:
